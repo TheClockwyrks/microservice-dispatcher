@@ -762,6 +762,10 @@ fn driver_container_carries_resource_requests() {
         "a driver memory limit is an OOM kill waiting for the first run that outgrows it"
     );
     assert_eq!(limits["cpu"].0, DEFAULT_DRIVER_CPU_LIMIT);
+    // The default is only half of it: an overlay can put either limit back through
+    // `TCAB_DISPATCHER_DRIVER_MEMORY_LIMIT` or the sandbox pod's
+    // `TCAB_K8S_RUN_MEMORY_LIMIT` passthrough. The manifests live in the superrepo,
+    // so its `k8s-deploy-sets` gate refuses a manifest that sets either.
 }
 
 #[test]
@@ -838,62 +842,6 @@ fn driver_container_omits_resources_when_all_are_blank() {
 
     let job = build_driver_job(&claim(), &config).unwrap();
     assert!(container(&job).resources.is_none());
-}
-
-#[test]
-fn no_shipped_manifest_sets_a_memory_limit_on_a_run_pod() {
-    // The Rust default above guarantees the driver container carries no memory limit,
-    // but the SANDBOX pod's memory limit is a plain env passthrough
-    // (`TCAB_K8S_RUN_MEMORY_LIMIT`), and the driver's own can be re-added by any
-    // overlay setting `TCAB_DISPATCHER_DRIVER_MEMORY_LIMIT`. Either would silently
-    // put the OOM kill back on a run pod, so this walks every manifest under
-    // deployments/k8s and refuses an uncommented `name:` entry for either variable.
-    // A limit is a cgroup ceiling enforced by SIGKILL, and a run pod killed by it
-    // destroys a run that has already paid for its API calls
-    // (see `DEFAULT_DRIVER_MEMORY_REQUEST`).
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployments/k8s");
-    let mut offenders = Vec::new();
-    let mut stack = vec![root.clone()];
-    let mut seen = 0usize;
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("deployments/k8s is readable") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue;
-            }
-            seen += 1;
-            let text = std::fs::read_to_string(&path).expect("manifest is readable");
-            for (index, line) in text.lines().enumerate() {
-                let line = line.trim_start();
-                if line.starts_with('#') {
-                    continue;
-                }
-                for var in [
-                    "TCAB_K8S_RUN_MEMORY_LIMIT",
-                    "TCAB_DISPATCHER_DRIVER_MEMORY_LIMIT",
-                ] {
-                    if line.starts_with("- name:") && line.contains(var) {
-                        offenders.push(format!(
-                            "{}:{}: {line}",
-                            path.strip_prefix(&root).unwrap_or(&path).display(),
-                            index + 1
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    assert!(seen > 0, "no manifests found under {}", root.display());
-    assert!(
-        offenders.is_empty(),
-        "a shipped manifest sets a memory limit on a run pod, which is an OOM kill \
-         waiting for the first run that outgrows it:\n{}",
-        offenders.join("\n")
-    );
 }
 
 #[test]

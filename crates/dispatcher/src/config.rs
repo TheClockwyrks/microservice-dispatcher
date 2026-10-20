@@ -9,7 +9,7 @@
 //! | Variable | Required | Purpose | Default |
 //! | --- | --- | --- | --- |
 //! | `TCAB_BACKEND_URL` | yes | The backend the dispatcher claims jobs from (`POST /jobs/next`) and reports driver-pod deaths to (`POST /jobs/{id}/status`). | — |
-//! | `TCAB_BACKEND_SERVICE_TOKEN` | yes | The shared service token authenticating the claim (`ServiceAuth`); see `backend/src/auth.rs`. | — |
+//! | `TCAB_BACKEND_SERVICE_TOKEN` | yes | The shared service token authenticating the claim (`ServiceAuth`); see microservice-backend's `crates/backend/src/auth.rs`. | — |
 //! | `TCAB_DRIVER_IMAGE` | yes | The driver container image each created `Job`'s pod runs. | — |
 //! | `TCAB_DISPATCHER_NAMESPACE` | no | The namespace the dispatcher creates driver `Job`s in. | the in-cluster namespace, else `default` |
 //! | `TCAB_DISPATCHER_DRIVER_SA` | no | The ServiceAccount assigned to each driver pod (the repurposed `tcab-worker` RBAC that can create/exec/delete sandbox pods). `None` uses the namespace default. | — |
@@ -154,7 +154,9 @@ pub const DEFAULT_DRIVER_CPU_LIMIT: &str = "2";
 /// The always-on services (backend, artifacts, auth, dispatcher, web) keep memory
 /// request == limit, because for them a kill is a restart, not lost spend, and a
 /// bounded service can never be what crowds a run pod off its node. The `resources`
-/// blocks in `deployments/k8s/base/*.yaml` carry that argument.
+/// blocks in the superrepo's `deployments/k8s/base/*.yaml` carry that argument,
+/// and its `k8s-deploy-sets` gate refuses a manifest that sets a memory limit on a
+/// run pod.
 pub const DEFAULT_DRIVER_MEMORY_REQUEST: &str = "2Gi";
 
 /// The default CPU request on the **publisher** container.

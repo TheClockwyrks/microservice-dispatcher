@@ -1,8 +1,10 @@
 [package]
 name = "test-cabinet-dispatcher"
+description = "The dispatcher: claims queued runs and publishes and creates one Kubernetes Job for each."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 [[bin]]

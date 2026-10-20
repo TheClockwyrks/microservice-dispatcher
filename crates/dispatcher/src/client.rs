@@ -4,7 +4,7 @@
 //! `api/jobs.rs`):
 //!
 //! - **Claim** — `POST /jobs/next`, authenticated with the shared **service
-//!   token** ([`ServiceAuth`](../../backend/src/auth.rs)). `200` hands back a
+//!   token** (the backend's `ServiceAuth`, in microservice-backend). `200` hands back a
 //!   [`ClaimedJob`]; `204` means the queue is empty.
 //! - **Claim publish** — `POST /publish-jobs/next`, same service token, drains the
 //!   parallel **publish** queue. `200` hands back a [`PublishClaim`] the dispatcher
