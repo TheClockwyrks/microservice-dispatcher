@@ -125,8 +125,8 @@ pub fn lease_renewals(managed: &[ManagedJob]) -> Vec<String> {
         .collect()
 }
 
-/// The jobs the dispatcher judges lost as of `now`: each `starting`, `running` or
-/// `storing` job whose lease has lapsed. A lease the backend reports none of, or one
+/// The jobs the dispatcher judges lost as of `now`: each `starting`, `running`,
+/// `validating` or `storing` job whose lease has lapsed. A lease the backend reports none of, or one
 /// that does not parse, counts as lapsed, as it does at the backend. A `dispatched`
 /// job is never answered: the backend returns a lapsed one to the queue itself. The
 /// expiries are compared as instants, never as strings. Pure, so it is unit-tested
@@ -136,7 +136,7 @@ pub fn lapsed(jobs: &[ActiveJob], now: OffsetDateTime) -> Vec<String> {
         .filter(|job| {
             matches!(
                 job.state,
-                JobState::Starting | JobState::Running | JobState::Storing
+                JobState::Starting | JobState::Running | JobState::Validating | JobState::Storing
             )
         })
         .filter(|job| lease_lapsed(job.lease_expires_at.as_deref(), now))

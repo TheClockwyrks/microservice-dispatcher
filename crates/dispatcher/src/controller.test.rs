@@ -234,7 +234,7 @@ fn leases_compare_chronologically_not_lexically() {
 }
 
 #[test]
-fn only_starting_running_and_storing_jobs_are_judged() {
+fn only_starting_running_validating_and_storing_jobs_are_judged() {
     let now = instant("2026-10-19T12:00:00Z");
     let states = [
         JobState::Queued,
@@ -242,6 +242,7 @@ fn only_starting_running_and_storing_jobs_are_judged() {
         JobState::Dispatched,
         JobState::Starting,
         JobState::Running,
+        JobState::Validating,
         JobState::Storing,
         JobState::Succeeded,
         JobState::Failed,
@@ -255,6 +256,6 @@ fn only_starting_running_and_storing_jobs_are_judged() {
         .collect();
     assert_eq!(
         lapsed(&jobs, now),
-        vec!["Starting-3", "Running-4", "Storing-5"]
+        vec!["Starting-3", "Running-4", "Validating-5", "Storing-6"]
     );
 }

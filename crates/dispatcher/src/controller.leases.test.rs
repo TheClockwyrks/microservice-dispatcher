@@ -208,7 +208,10 @@ async fn renew(
     }
     for id in &body.job_ids {
         if let Some(job) = backend.job(id)
-            && matches!(job.state, "dispatched" | "starting" | "running" | "storing")
+            && matches!(
+                job.state,
+                "dispatched" | "starting" | "running" | "validating" | "storing"
+            )
         {
             job.lease = Some(lease_from_now());
         }
@@ -279,7 +282,7 @@ async fn lost(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if let Some(job) = backend.job(&id)
-        && matches!(job.state, "starting" | "running" | "storing")
+        && matches!(job.state, "starting" | "running" | "validating" | "storing")
     {
         job.state = "failed";
     }
@@ -635,6 +638,34 @@ async fn a_fresh_dispatcher_reports_a_lapsed_lease_with_no_job_lost_at_once() {
             .expect("lock")
             .job("gone")
             .expect("gone")
+            .state,
+        "failed"
+    );
+}
+
+/// A job whose driver died while it was validating is lost like any other driven
+/// job: its lease lapses with no `Job` to renew it, and the dispatcher reports it.
+#[tokio::test]
+async fn a_validating_job_whose_driver_is_gone_is_reported_lost() {
+    let (mut dispatcher, shared, _cluster) = fresh(
+        vec![stub_job("checking", 1, "validating", Some(LAPSED))],
+        Vec::new(),
+    )
+    .await;
+
+    dispatcher.tick().await.expect("tick");
+
+    let routes: Vec<String> = reports(&shared)
+        .into_iter()
+        .map(|call| call.route)
+        .collect();
+    assert_eq!(routes, vec!["POST /jobs/checking/lost".to_string()]);
+    assert_eq!(
+        shared
+            .lock()
+            .expect("lock")
+            .job("checking")
+            .expect("checking")
             .state,
         "failed"
     );
