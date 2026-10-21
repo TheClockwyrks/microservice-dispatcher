@@ -76,3 +76,13 @@ async fn job_state_surfaces_a_refused_credential() {
         "unexpected error: {error:?}"
     );
 }
+
+#[test]
+fn a_validating_job_is_driven_and_so_can_be_lost() {
+    // A validating job's driver is alive collecting and validating the run. One
+    // that died must be found, or the job would stay in flight for good.
+    let validating: JobState = serde_json::from_str(r#""validating""#).expect("parse");
+    assert_eq!(validating, JobState::Validating);
+    assert!(validating.is_driven());
+    assert!(!validating.is_terminal());
+}

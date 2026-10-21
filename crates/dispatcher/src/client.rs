@@ -97,8 +97,12 @@ pub enum JobState {
     Dispatched,
     /// The driver pod is up and running the pre-run container setup.
     Starting,
-    /// The driver is executing the run.
+    /// The driver is executing the run's harness session.
     Running,
+    /// The harness session has ended and the driver is doing the post-session work:
+    /// collecting the tree, the post-run analysis, the case's toolchain, validation
+    /// and the upload. Still driven: the driver can be lost here.
+    Validating,
     /// The run is over and the driver is handing its result to durable storage;
     /// the backend holds its record. Still driven: the driver can be lost here.
     Storing,
@@ -120,7 +124,7 @@ impl JobState {
     pub fn is_driven(self) -> bool {
         matches!(
             self,
-            Self::Dispatched | Self::Starting | Self::Running | Self::Storing
+            Self::Dispatched | Self::Starting | Self::Running | Self::Validating | Self::Storing
         )
     }
 
@@ -364,8 +368,8 @@ impl BackendClient {
     /// Report a job whose driver is gone without having reported
     /// (`POST /jobs/{id}/lost`, service token). `detail` says what the dispatcher found.
     /// The backend finishes the job only while it is still `dispatched`, `starting`,
-    /// `running` or `storing` (from its held record when it holds one), so a report
-    /// racing the driver's own is harmless.
+    /// `running`, `validating` or `storing` (from its held record when it holds
+    /// one), so a report racing the driver's own is harmless.
     pub async fn report_lost(
         &self,
         job_id: &str,
