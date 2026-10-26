@@ -100,7 +100,6 @@ fn config() -> Config {
                 "TCAB_REPOS_URL".to_string(),
                 "http://tcab-repos:8792".to_string(),
             ),
-            ("TCAB_GITHUB_ORG".to_string(), "TheClockwyrks".to_string()),
             ("TCAB_PAGES_PROJECT".to_string(), "tcab-runs".to_string()),
         ],
     }
@@ -550,7 +549,7 @@ fn publish_job_sets_the_claim_env() {
 }
 
 #[test]
-fn publish_job_forwards_artifacts_org_and_pages_project() {
+fn publish_job_forwards_artifacts_repos_and_pages_project() {
     let job = build_publish_job(&publish_claim(), &config());
     let map = env_map(container(&job).env.as_ref().unwrap());
 
@@ -562,10 +561,7 @@ fn publish_job_forwards_artifacts_org_and_pages_project() {
         map["TCAB_REPOS_URL"].value.as_deref(),
         Some("http://tcab-repos:8792")
     );
-    assert_eq!(
-        map["TCAB_GITHUB_ORG"].value.as_deref(),
-        Some("TheClockwyrks")
-    );
+    assert!(!map.contains_key("TCAB_GITHUB_ORG"));
     assert_eq!(
         map["TCAB_PAGES_PROJECT"].value.as_deref(),
         Some("tcab-runs")

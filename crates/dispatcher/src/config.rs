@@ -28,7 +28,7 @@
 //! | `TCAB_PUBLISHER_IMAGE` | no | The `tcab-publisher` container image each created publish `Job`'s pod runs. Unset disables the publish path entirely — the dispatcher claims no publish jobs and builds no publish `Job`s, so a deployment without a publisher image simply never publishes. | — |
 //! | `TCAB_DISPATCHER_PUBLISHER_CPU_REQUEST` / `_MEMORY_REQUEST` / `_MEMORY_LIMIT` | no | Requests/limit on the publish `Job`'s container, mirroring the driver's. The memory pair defaults to one value so a node reserves what the publisher may use — see [`DEFAULT_PUBLISHER_MEMORY`]. | `100m` / `1Gi` / `1Gi` |
 //! | `TCAB_DISPATCHER_PUBLISHER_CPU_LIMIT` | no | The publisher's CPU limit. Unset: a publisher runs no toolchain, so nothing in it sizes itself from the CPU count it can see. | — |
-//! | `TCAB_DISPATCHER_PUBLISHER_SECRETS` | no | Comma-separated `Secret` names mounted into each publish `Job`'s env via `envFrom` (mirrors `TCAB_DISPATCHER_DRIVER_SECRETS`). This is how the publisher's `GH_TOKEN` (for `gh`) and `CLOUDFLARE_API_TOKEN` (for `wrangler`) reach it. Unset injects no secret env. | — |
+//! | `TCAB_DISPATCHER_PUBLISHER_SECRETS` | no | Comma-separated `Secret` names mounted into each publish `Job`'s env via `envFrom` (mirrors `TCAB_DISPATCHER_DRIVER_SECRETS`). This is how the publisher's one credential, `CLOUDFLARE_API_TOKEN` (for `wrangler` and the Pages API, with `CLOUDFLARE_ACCOUNT_ID`), reaches it. Unset injects no secret env. | — |
 //!
 //! The `TCAB_K8S_RUN_*` set below is **passed through** into each driver `Job`'s
 //! env verbatim — the dispatcher does not consume it, the driver does (see the
@@ -175,7 +175,7 @@ pub const DEFAULT_PUBLISHER_CPU_REQUEST: &str = "100m";
 /// Unlike every other value here this one is **not** measured: no publish `Job` has
 /// been captured by the metrics that would show its peak. It is reasoned instead, and
 /// generously. The publisher pulls a run's source tree from the artifact service — the
-/// largest of prod's 568 stored trees is 176MiB — and drives `gh` and `wrangler` over
+/// largest of prod's 568 stored trees is 176MiB — and drives `wrangler` over
 /// it, so 1Gi is several times the largest plausible working set. The asymmetry
 /// justifies the generosity: an unbounded container threatens whatever shares its
 /// node, whereas a ceiling set too high merely reserves memory, and a publisher that
@@ -261,27 +261,29 @@ pub const PASSTHROUGH_K8S_VARS: &[&str] = &[
 
 /// The variables the dispatcher passes through into each **publish** `Job`'s env
 /// verbatim — the artifact-service URL (the publisher downloads the run's
-/// `tree.tar` from it), the repos-service URL (publishing pushes the run's bundle
-/// from it), the GitHub org / Cloudflare Pages project the publisher's
-/// `PublishConfig::from_env` resolves, and the observability vars. The publisher
+/// `tree.tar` from it), the repos-service URL (the publisher calls its publish
+/// route, which pushes the run's bundle to its public repository), the Cloudflare
+/// Pages project the publisher's `PublishConfig::from_env` resolves, and the
+/// observability vars. The publisher
 /// never interprets the values the dispatcher reads here; it only forwards the ones
 /// that are set. The backend URL, job id, job token, and run id are *not* listed —
 /// those come from the claim and are set explicitly on every publish `Job`.
 pub const PUBLISHER_PASSTHROUGH_VARS: &[&str] = &[
     // The publisher downloads the produced run tree (`GET /runs/{id}/tree.tar`) from
-    // this artifact service before running the gh/wrangler release. Unset (a
+    // this artifact service before running the Pages deploy. Unset (a
     // single-box dev cluster with no artifact service) leaves the publisher with no
     // tree to release — the publish path is only enabled in a full deployment.
     "TCAB_ARTIFACTS_URL",
-    // The repos service holding the run's implementation bundle, which publishing
-    // pushes to the run's public repository (`POST /runs/{id}/publish`).
+    // The repos service holding the run's implementation bundle: the publisher calls
+    // its `POST /runs/{id}/publish`, which pushes the bundle to the run's public
+    // repository. The publisher requires it, so a publish Job handed none fails
+    // loudly. The GitHub organization and token are the repos service's own.
     "TCAB_REPOS_URL",
-    // The publisher's `PublishConfig::from_env` reads these to choose
-    // the GitHub org the public per-run repo lands in and the Cloudflare Pages
-    // project the playable build deploys to. Both are required there (no compiled-in
-    // fallback), so every deployment's overlay sets them explicitly; the dispatcher
-    // forwards them only if set, and a publish Job handed neither fails loudly.
-    "TCAB_GITHUB_ORG",
+    // The publisher's `PublishConfig::from_env` reads this to choose the
+    // Cloudflare Pages project the playable build deploys to. It is required there
+    // (no compiled-in fallback), so every deployment's overlay sets it explicitly;
+    // the dispatcher forwards it only if set, and a publish Job handed none fails
+    // loudly.
     "TCAB_PAGES_PROJECT",
     // Observability: forwarded so each per-publish Job exports its spans to the same
     // OTLP collector as the services, tagged with the same environment.
@@ -474,17 +476,16 @@ pub struct Config {
     pub publisher_image: Option<String>,
     /// `Secret` names mounted into each publish `Job`'s env via `envFrom`
     /// (`TCAB_DISPATCHER_PUBLISHER_SECRETS`, comma-separated), mirroring
-    /// [`driver_secrets`](Self::driver_secrets). Carries the publisher's `GH_TOKEN`
-    /// (for `gh`) and `CLOUDFLARE_API_TOKEN` (for `wrangler`). Empty injects no
-    /// secret env.
+    /// [`driver_secrets`](Self::driver_secrets). Carries the publisher's one
+    /// credential, `CLOUDFLARE_API_TOKEN` (for `wrangler` and the Pages API), with
+    /// `CLOUDFLARE_ACCOUNT_ID`. Empty injects no secret env.
     pub publisher_secrets: Vec<String>,
     /// The publisher container's resource requests and limits
     /// (`TCAB_DISPATCHER_PUBLISHER_CPU_REQUEST` / `_MEMORY_REQUEST` / `_MEMORY_LIMIT` /
     /// `_CPU_LIMIT`). See [`DEFAULT_PUBLISHER_MEMORY`].
     pub publisher_resources: DriverResources,
     /// The variables passed through into each publish `Job`'s env verbatim
-    /// (`TCAB_ARTIFACTS_URL`, `TCAB_REPOS_URL`, `TCAB_GITHUB_ORG`,
-    /// `TCAB_PAGES_PROJECT`, and the observability vars that are set), collected once at startup. See
+    /// (`TCAB_ARTIFACTS_URL`, `TCAB_REPOS_URL`, `TCAB_PAGES_PROJECT`, and the observability vars that are set), collected once at startup. See
     /// [`PUBLISHER_PASSTHROUGH_VARS`].
     pub passthrough_publisher_env: Vec<(String, String)>,
 }

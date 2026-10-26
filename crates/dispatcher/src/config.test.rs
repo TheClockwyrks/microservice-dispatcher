@@ -154,12 +154,15 @@ fn publisher_config_parses_when_set() {
             config.publisher_secrets,
             vec!["tcab-publisher-secrets", "tcab-cf"]
         );
-        // The GitHub org and Pages project are forwarded into the publish Job for
-        // the publisher's `PublishConfig::from_env` to resolve.
+        // The Pages project is forwarded into the publish Job for the publisher's
+        // `PublishConfig::from_env` to resolve. The GitHub organization is the repos
+        // service's alone, so it is not forwarded even when the dispatcher's env
+        // carries it.
         assert!(
-            config
+            !config
                 .passthrough_publisher_env
-                .contains(&("TCAB_GITHUB_ORG".to_string(), "TheClockwyrks".to_string()))
+                .iter()
+                .any(|(key, _)| key == "TCAB_GITHUB_ORG")
         );
         assert!(
             config

@@ -321,7 +321,8 @@ pub fn build_driver_job(claim: &ClaimedJob, config: &Config) -> Result<Job, serd
 /// claim and config, so the manifest is unit-tested without a cluster.
 ///
 /// Unlike the driver `Job`, the publisher only ever talks **HTTP** — it downloads
-/// the run's `tree.tar` from the artifact service, runs the gh/wrangler release, and
+/// the run's `tree.tar` from the artifact service, deploys its build with `wrangler`,
+/// calls the repos service's publish route, and
 /// reports its result and progress to the backend over the publish-job token. So it
 /// deliberately carries **none** of the driver's k8s extras: no sandbox-pod
 /// passthroughs, no `TCAB_K8S_POD_IP` downward-API var, no subscription volume, and
@@ -345,16 +346,17 @@ pub fn build_publish_job(claim: &PublishClaim, config: &Config) -> Job {
         plain_env("TCAB_PUBLISH_JOB_TOKEN", &claim.job_token),
         plain_env("TCAB_PUBLISH_RUN_ID", &claim.run_id),
     ];
-    // Forward the artifact-service URL (for the `tree.tar` download) and the
-    // GitHub-org / Pages-project the publisher's `PublishConfig::from_env` resolves,
-    // plus the observability vars — exactly the set captured at startup, and only
+    // Forward the artifact-service URL (for the `tree.tar` download), the
+    // repos-service URL (for its publish route) and the Pages project the
+    // publisher's `PublishConfig::from_env` resolves, plus the observability vars — exactly the set captured at startup, and only
     // the ones that were set.
     for (key, value) in &config.passthrough_publisher_env {
         env.push(plain_env(key, value));
     }
 
-    // Mount the publisher Secret(s) into the pod's env: `GH_TOKEN` (for `gh`) and
-    // `CLOUDFLARE_API_TOKEN` (for `wrangler`). Omitted (`None`) when no publisher
+    // Mount the publisher Secret(s) into the pod's env: its one credential,
+    // `CLOUDFLARE_API_TOKEN` (for `wrangler` and the Pages API), with
+    // `CLOUDFLARE_ACCOUNT_ID`. Omitted (`None`) when no publisher
     // secrets are configured.
     let env_from = (!config.publisher_secrets.is_empty()).then(|| {
         config
