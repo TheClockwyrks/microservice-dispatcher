@@ -52,6 +52,13 @@
 //! which ends one that has hung; its `Job` then fails and is reported lost the same
 //! way.
 //!
+//! The loop stops on a shutdown request (`SIGTERM`, or an interrupt) without ever
+//! cutting a tick short: a request that arrives during a tick lets it finish, so a
+//! claim it has made always receives its `Job`, and the tick claims nothing further;
+//! one that arrives between ticks or during the idle backoff stops the loop at once
+//! (see [`Dispatcher::run`]). A claim lost anyway, to a `SIGKILL`, is recovered by
+//! its lapsed lease.
+//!
 //! The leases live in Postgres, so a restarted dispatcher judges each job against
 //! the expiry its predecessor last set; it keeps no clock of its own. The only
 //! in-memory state is `{job_id → job_token}` for jobs this process dispatched,
@@ -61,6 +68,8 @@
 //! job's lease lapses.
 
 use std::collections::{HashMap, HashSet};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -220,35 +229,93 @@ impl<C: Cluster> Dispatcher<C> {
         }
     }
 
-    /// Run the control loop forever. Each iteration reconciles the cluster, then
-    /// admits queued jobs as each lane's in-flight cap allows; transient errors are
-    /// logged and the loop backs off rather than exiting (the dispatcher is a
-    /// long-lived controller).
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    /// Run the control loop until `shutdown` resolves. Each iteration reconciles the
+    /// cluster, then admits queued jobs as each lane's in-flight cap allows; transient
+    /// errors are logged and the loop backs off rather than exiting (the dispatcher is
+    /// a long-lived controller).
+    ///
+    /// `shutdown` is the stop request, the process's `SIGTERM` or interrupt (see
+    /// [`shutdown_signal`](crate::signal::shutdown_signal)). It never cancels a tick:
+    /// a request that arrives during one lets that tick finish, so a job it has
+    /// already claimed receives its `Job`, while the lanes it has not yet reached
+    /// claim nothing more. A request that arrives between ticks, the idle backoff
+    /// included, ends the loop at once. Either way the loop returns `Ok`, and starts
+    /// no further tick.
+    pub async fn run(mut self, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
+        tokio::pin!(shutdown);
         loop {
-            match self.tick().await {
-                Ok(admitted) if admitted => {
-                    // Admitted at least one job; loop straight back to keep draining
-                    // the queue while there is capacity, without an idle backoff.
-                    continue;
+            // Between ticks: stop before starting another if the request is in.
+            if stop_requested(&mut shutdown).await {
+                tracing::info!("shutdown requested between ticks; dispatcher stopping");
+                return Ok(());
+            }
+
+            // The tick runs to completion whatever happens to `shutdown`: the request
+            // is only noted, for the tick to claim nothing further, and awaited no
+            // more once it has arrived.
+            let stopping = AtomicBool::new(false);
+            let outcome = {
+                let tick = self.tick_until(&stopping);
+                tokio::pin!(tick);
+                tokio::select! {
+                    biased;
+                    outcome = &mut tick => outcome,
+                    () = &mut shutdown => {
+                        stopping.store(true, Ordering::SeqCst);
+                        tracing::info!(
+                            "shutdown requested during a tick; finishing the tick in progress"
+                        );
+                        tick.await
+                    }
                 }
-                Ok(_) => {}
+            };
+            let stopping = stopping.load(Ordering::SeqCst);
+
+            let admitted = match outcome {
+                Ok(admitted) => admitted,
                 Err(err) => {
                     tracing::warn!(
                         error = %err,
                         poll_interval_secs = self.config.poll_interval.as_secs_f64(),
                         "dispatcher tick failed"
                     );
+                    false
+                }
+            };
+            if stopping {
+                tracing::info!("the tick in progress finished; dispatcher stopping");
+                return Ok(());
+            }
+            if admitted {
+                // Admitted at least one job; loop straight back to keep draining the
+                // queue while there is capacity, without an idle backoff.
+                continue;
+            }
+            tokio::select! {
+                () = sleep(self.config.poll_interval) => {}
+                () = &mut shutdown => {
+                    tracing::info!("shutdown requested while idle; dispatcher stopping");
+                    return Ok(());
                 }
             }
-            sleep(self.config.poll_interval).await;
         }
+    }
+
+    /// One iteration that is never asked to stop (see [`tick_until`](Self::tick_until)).
+    #[cfg(test)]
+    pub(crate) async fn tick(&mut self) -> anyhow::Result<bool> {
+        self.tick_until(&AtomicBool::new(false)).await
     }
 
     /// One iteration: reconcile, then try to admit one job through each lane that
     /// has room. Returns whether any job was admitted, so the caller can keep
     /// draining the queues without backing off while capacity remains.
-    pub(crate) async fn tick(&mut self) -> anyhow::Result<bool> {
+    ///
+    /// `stopping` is set when a shutdown is requested while the tick is in progress.
+    /// The tick then finishes what it has started, the reconcile and a claim already
+    /// made, which is always followed by its `Job`'s creation, but makes no further
+    /// claim: a lane not yet reached when it is set is skipped.
+    pub(crate) async fn tick_until(&mut self, stopping: &AtomicBool) -> anyhow::Result<bool> {
         let managed = self.cluster.list_managed().await?;
         let renewed = self.renew_leases(&managed).await;
         self.detect_deaths(&managed).await;
@@ -278,10 +345,10 @@ impl<C: Cluster> Dispatcher<C> {
         // queue does not stop this tick from admitting the other's work (nor send the
         // loop into its backoff when that work was admitted).
         let mut admitted = false;
-        if lanes.publish {
+        if lanes.publish && !stopping.load(Ordering::SeqCst) {
             admitted |= lane_admitted("publish", self.admit_publish().await);
         }
-        if lanes.run {
+        if lanes.run && !stopping.load(Ordering::SeqCst) {
             admitted |= lane_admitted("run", self.admit_run().await);
         }
         Ok(admitted)
@@ -573,6 +640,15 @@ impl<C: Cluster> Dispatcher<C> {
     }
 }
 
+/// Whether `shutdown` has already resolved, without waiting for it.
+async fn stop_requested<F: Future<Output = ()>>(shutdown: &mut Pin<&mut F>) -> bool {
+    tokio::select! {
+        biased;
+        () = shutdown.as_mut() => true,
+        () = std::future::ready(()) => false,
+    }
+}
+
 /// Whether a lane admitted a job this tick, logging the lane's failure when it had
 /// one. A failed lane admitted nothing.
 fn lane_admitted(lane: &'static str, result: anyhow::Result<bool>) -> bool {
@@ -596,3 +672,7 @@ mod lease_tests;
 #[cfg(test)]
 #[path = "controller.publish.test.rs"]
 mod publish_tests;
+
+#[cfg(test)]
+#[path = "controller.shutdown.test.rs"]
+mod shutdown_tests;

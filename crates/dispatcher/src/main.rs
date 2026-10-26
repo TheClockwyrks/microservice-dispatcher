@@ -1,15 +1,18 @@
 //! The `tcab-dispatcher` binary entrypoint.
 //!
 //! Resolves its configuration from the environment, connects to the Kubernetes API
-//! and the backend, and runs the control loop forever: claim queued jobs, create
-//! one driver `Job` per run, and report any driver-pod death the driver itself
-//! could not. There is no server and no flags; everything arrives through `TCAB_*`
-//! env (see [`config`](test_cabinet_dispatcher::config)).
+//! and the backend, and runs the control loop until it is asked to stop: claim
+//! queued jobs, create one driver `Job` per run, and report any driver-pod death the
+//! driver itself could not. On `SIGTERM` or an interrupt it finishes the tick in
+//! progress and exits 0 (see [`signal`](test_cabinet_dispatcher::signal)). There is
+//! no server and no flags; everything arrives through `TCAB_*` env (see
+//! [`config`](test_cabinet_dispatcher::config)).
 
 use std::process::ExitCode;
 
 use test_cabinet_dispatcher::config::Config;
 use test_cabinet_dispatcher::controller::Dispatcher;
+use test_cabinet_dispatcher::signal::shutdown_signal;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -26,6 +29,17 @@ async fn main() -> ExitCode {
         Ok(guard) => guard,
         Err(err) => {
             eprintln!("telemetry initialization error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Take over `SIGTERM` and the interrupt before anything that can take time, so a
+    // stop request during startup is held for the loop rather than killing the
+    // process by the signal's default action.
+    let shutdown = match shutdown_signal() {
+        Ok(shutdown) => shutdown,
+        Err(err) => {
+            eprintln!("could not install the signal handlers: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -55,10 +69,12 @@ async fn main() -> ExitCode {
         }
     };
 
-    // The control loop runs forever; it only returns on a fatal error.
-    if let Err(err) = dispatcher.run().await {
+    // The control loop runs until the stop request, finishing the tick in progress
+    // when it arrives; it returns an error only when it cannot go on.
+    if let Err(err) = dispatcher.run(shutdown).await {
         eprintln!("dispatcher loop exited: {err}");
         return ExitCode::FAILURE;
     }
+    tracing::info!("dispatcher stopped");
     ExitCode::SUCCESS
 }

@@ -22,6 +22,9 @@
 //!    (see [`kubernetes`]) so an infra failure never leaves a job hung with no
 //!    diagnostic.
 //!
+//! On `SIGTERM` (or an interrupt) it finishes the tick in progress, so a run it has
+//! claimed receives its `Job`, starts no other, and exits 0 (see [`signal`]).
+//!
 //! It holds no durable state: only an in-memory `{job_id → job_token}` map for the
 //! death-detection report, which a restart safely loses.
 
@@ -30,3 +33,4 @@ pub mod config;
 pub mod controller;
 pub mod job;
 pub mod kubernetes;
+pub mod signal;
